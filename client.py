@@ -179,19 +179,6 @@ class Gateway(object):
         )
 
     def start_tunnel(self):
-        params = {
-            'user': self.portal.username,
-            'authcookie': self.auth_cookie
-        }
-        # TODO: Connect address may change
-        try:
-            req = requests.get(url=self.server + '/ssl-tunnel-connect.sslvpn',
-                               params=params,
-                               headers={},
-                               verify=self.verify)
-        except requests.exceptions.ConnectionError as e:
-            print(e)  # TODO: get inner exception
-
         c = 'GET /ssl-tunnel-connect.sslvpn?user=%s&authcookie=%s HTTP/1.1\r\n\r\n' % (
             self.portal.username, self.auth_cookie)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -199,7 +186,7 @@ class Gateway(object):
         ssl_sock.connect((self.server_name, 443))
         ssl_sock.send(c.encode('utf-8'))
         result = ssl_sock.recv(1024)
-        logger.debug(result.decode('utf-8'))
+        logger.debug(repr(result))
         ssl_sock.close()
 
     def logout(self):
