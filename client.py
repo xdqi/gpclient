@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+#
 # GlobalProtect Client
 # Copyright (C) 2015 Xiaodong Qi
 #
@@ -18,11 +20,13 @@ import requests
 import requests.exceptions
 from lxml import etree
 import socket
+import ssl
+import binascii
 
 import logging
 logging.basicConfig(format='%(asctime)s %(levelno)s\t%(funcName)s: %(message)s')
 logger = logging.getLogger('GlobalProtectClient')
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 
 
 class GlobalProtectException(Exception):
@@ -123,7 +127,7 @@ class Gateway(object):
             'ok': 'Login',
             'direct': 'yes',
             'userauthcookie': self.portal.auth_cookie,
-            'clientVer': '4100\x00'
+            'clientVer': '4100'
         }
         req = requests.post(url=self.server + '/ssl-vpn/login.esp',
                             headers=self.headers,
@@ -144,16 +148,35 @@ class Gateway(object):
             'authcookie': self.auth_cookie,
             'client-type': '1',
             'os-version': 'Microsoft Windows XP Professional Service Pack 3',
-            'app-version': '2.1.1-25',
-            'protocol-version': 'p1\x00'
+            'app-version': '2.3.2-7',
+            'protocol-version': 'p1',
+            'clientos': 'Windows',
+            'enc-algo': 'aes-256-gcm,aes-128-gcm,aes-128-cbc,',
+            'hmac-algo': 'sha1,'
         }
         req = requests.post(url=self.server + '/ssl-vpn/getconfig.esp',
                             headers=self.headers,
                             data=data,
                             verify=self.verify)
         logger.debug(repr(req.text))
-        print(req.text)
-        # TODO: deal with XML
+        result = etree.fromstring(req.content)
+        return Connection(
+            gw_address=result.xpath('/response/gw-address')[0].text,
+            udp_port=int(result.xpath('/response/ipsec/udp-port')[0].text),
+            ip_address=result.xpath('/response/ip-address')[0].text,
+            netmask=result.xpath('/response/netmask')[0].text,
+            default_gateway=result.xpath('/response/default-gateway')[0].text,
+            dns=[item.text for item in result.xpath('/response/dns/member')],
+            access_routes=[item.text for item in result.xpath('/response/access-routes/member')],
+            enc_algo=result.xpath('/response/ipsec/enc-algo')[0].text,
+            hmac_algo=result.xpath('/response/ipsec/hmac-algo')[0].text,
+            c2s_spi=result.xpath('/response/ipsec/c2s-spi')[0].text,
+            akey_c2s=binascii.unhexlify(result.xpath('/response/ipsec/akey-c2s/val')[0].text),
+            ekey_c2s=binascii.unhexlify(result.xpath('/response/ipsec/ekey-c2s/val')[0].text),
+            s2c_spi=result.xpath('/response/ipsec/s2c-spi')[0].text,
+            akey_s2c=binascii.unhexlify(result.xpath('/response/ipsec/akey-s2c/val')[0].text),
+            ekey_s2c=binascii.unhexlify(result.xpath('/response/ipsec/ekey-s2c/val')[0].text),
+        )
 
     def start_tunnel(self):
         params = {
@@ -169,6 +192,16 @@ class Gateway(object):
         except requests.exceptions.ConnectionError as e:
             print(e)  # TODO: get inner exception
 
+        c = 'GET /ssl-tunnel-connect.sslvpn?user=%s&authcookie=%s HTTP/1.1\r\n\r\n' % (
+            self.portal.username, self.auth_cookie)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ssl_sock = ssl.wrap_socket(sock)
+        ssl_sock.connect((self.server_name, 443))
+        ssl_sock.send(c.encode('utf-8'))
+        result = ssl_sock.recv(1024)
+        logger.debug(result.decode('utf-8'))
+        ssl_sock.close()
+
     def logout(self):
         data = {
             'user': self.portal.username,
@@ -183,5 +216,92 @@ class Gateway(object):
                             verify=self.verify)
         logger.debug(repr(req.text))
 
+
+class Connection(object):
+    def __init__(self,
+                 gw_address: str,
+                 udp_port: int,
+                 ip_address: str,
+                 netmask: str,
+                 default_gateway: str,
+                 dns: list,
+                 access_routes: list,
+                 enc_algo: str,
+                 hmac_algo: str,
+                 c2s_spi: int,
+                 s2c_spi: int,
+                 akey_s2c: bytes,
+                 ekey_s2c: bytes,
+                 akey_c2s: bytes,
+                 ekey_c2s: bytes
+                 ):
+        self.algorithms_list = {
+            'aes128': 'AES-128-CBC (RFC 3602)',
+            'sha1': 'HMAC-SHA-1-96 (RFC 2404)'
+        }
+        self.algorithms = dict(
+            encryption=self.algorithms_list[enc_algo],
+            authentication=self.algorithms_list[hmac_algo]
+        )
+        self.client = dict(
+            encryption_key=ekey_c2s,
+            authentication_key=akey_c2s,
+            spi=c2s_spi
+        )
+        self.server = dict(
+            encryption_key=ekey_s2c,
+            authentication_key=akey_s2c,
+            spi=s2c_spi
+        )
+        self.gateway_ip = gw_address
+        self.port = udp_port
+        self.network = dict(
+            ip=ip_address,
+            netmask=netmask,
+            gateway=default_gateway,
+            dns=dns.copy(),
+            routes=access_routes.copy()
+        )
+
+    def show_info(self):
+        print('Please connect to server via ESP (RFC 4303) tunnel mode: ')
+        print('Server address: UDP %s:%s' % (self.gateway_ip, self.port))
+        print('Algorithms used in connection:')
+        print('Encryption:', self.algorithms['encryption'])
+        print('Authentication:', self.algorithms['authentication'])
+        print()
+        print('Keys used in connection:')
+        print('Client:')
+        print('Encryption:', binascii.hexlify(self.client['encryption_key']))
+        print('Authentication:', binascii.hexlify(self.client['authentication_key']))
+        print('Server:')
+        print('Encryption:', binascii.hexlify(self.server['encryption_key']))
+        print('Authentication:', binascii.hexlify(self.server['authentication_key']))
+        print()
+        print('Network information of new network card:')
+        print('IP address:', self.network['ip'])
+        print('Network mask:', self.network['netmask'])
+        print('Default gateway:', self.network['gateway'])
+        print('DNS:', ', '.join(self.network['dns']))
+        print('Routes:', ', '.join(self.network['routes']), 'via default gateway')
+
 if __name__ == '__main__':
-    pass
+    USER = ''
+    PASS = ''
+    SERVER = 'vpn.xxxx.edu'
+
+    # Connect to center portal
+    p = Portal(SERVER)
+    gateways = p.get_config(USER, PASS)
+    # Select one of gateways
+    preferred_gateway = gateways[0]
+
+    # Login onto the gateway
+    preferred_gateway.login()
+
+    # Get config from gateway
+    conn = preferred_gateway.get_config()
+    conn.show_info()
+
+    # Log out from gateway
+    preferred_gateway.logout()
