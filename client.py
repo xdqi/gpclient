@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # GlobalProtect Client
-# Copyright (C) 2015 Xiaodong Qi
+# Copyright (C) 2015-2016 Xiaodong Qi
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
