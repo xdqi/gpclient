@@ -25,15 +25,22 @@ class GlobalProtectException(Exception):
     pass
 
 
-    USER = ''
-    PASS = ''
-    SERVER = 'vpn.xxxx.edu'
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser('gpclient', description='Client of GlobalProtect')
+    parser.add_argument('username')
+    parser.add_argument('password')
+    parser.add_argument('server')
+    return vars(parser.parse_args())
+
+
 def main():
+    args = parse_args()
     logging.basicConfig(format='%(asctime)s %(levelno)s\t%(funcName)s: %(message)s')
 
     # Connect to center portal
-    p = Portal(SERVER)
-    gateways = p.get_config(USER, PASS)
+    p = Portal(args['server'])
+    gateways = p.get_config(args['username'], args['password'])
     # Select one of gateways
     preferred_gateway = gateways[0]
 
